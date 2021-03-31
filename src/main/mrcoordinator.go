@@ -20,7 +20,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := mr.MakeCoordinator(os.Args[1:], 10)
+	fmt.Println("Loaded File names include: ", os.Args[1:])
+
+	m := mr.MakeCoordinator(os.Args[1:], 10) // 将获取的所有文件名传入函数
+	//fmt.Printf("%v", m)
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}

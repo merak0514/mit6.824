@@ -22,8 +22,24 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+type RegisterArgs struct{}
 
+type RegisterReply struct {
+	WorkerId int
+}
+
+type ReplyMap struct {
+	AllArranged bool
+	FileName    string
+	Id          int
+	NReduce     int
+}
+
+type Idle struct {
+	Idle bool
+}
+
+// Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

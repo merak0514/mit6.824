@@ -64,6 +64,7 @@ func main() {
 	//
 	// call Reduce on each distinct key in intermediate[],
 	// and print the result to mr-out-0.
+	// 窒息写法，我日
 	//
 	i := 0
 	for i < len(intermediate) {
