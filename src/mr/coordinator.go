@@ -4,10 +4,32 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 import "net"
 import "net/rpc"
 import "net/http"
+
+type WorkerStatus struct {
+	workerId int
+	lastSeen int
+	status   int // -1 die; 0 idle
+	mu       sync.Mutex
+}
+
+func (ws *WorkerStatus) longTimeNoSee() {
+	for {
+		time.Sleep(1 * time.Second)
+		ws.mu.Lock()
+		ws.lastSeen++
+		if ws.lastSeen == 10 { //超过10s标记为死亡
+			ws.status = -1
+		}
+		ws.mu.Unlock()
+
+	}
+
+}
 
 type Coordinator struct {
 	// Your definitions here.
@@ -16,7 +38,7 @@ type Coordinator struct {
 	nReduce  int
 	mapDone  sync.WaitGroup
 	idCount  int
-	workers  []int
+	workers  map[int]*WorkerStatus
 	mu       sync.Mutex
 }
 
@@ -34,14 +56,27 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	reply.WorkerId = c.idCount
-	c.workers = append(c.workers, c.idCount)
+	workerStatus := WorkerStatus{workerId: c.idCount, lastSeen: 0}
+	go workerStatus.longTimeNoSee()
+	c.workers[c.idCount] = &workerStatus
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.idCount++
 	return nil
 }
 
-func (c *Coordinator) PingPong() error {
+// Sanity check
+func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
+	reply.Msg = "Pong" // useless but for fun
+	worker := c.workers[args.WorkerId]
+
+	worker.mu.Lock()
+	worker.lastSeen = 0
+	if worker.status == -1 { //重新收到信号的时候标记已经"死亡"的worker为空闲
+		worker.status = 0
+	}
+	worker.mu.Unlock()
 	return nil
 }
 

@@ -28,6 +28,14 @@ type RegisterReply struct {
 	WorkerId int
 }
 
+type PingArgs struct {
+	WorkerId int
+}
+
+type PingReply struct {
+	Msg string // useless but for fun
+}
+
 type ReplyMap struct {
 	AllArranged bool
 	FileName    string

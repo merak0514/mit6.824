@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -31,6 +32,7 @@ func ihash(key string) int {
 
 const (
 	register = "Coordinator.Register"
+	ping     = "Coordinator.Ping"
 )
 
 //
@@ -40,12 +42,20 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-
+	endFlag := false
 	workerId := Register()
 	fmt.Println("Currently in the Worker ", workerId)
 
+	go func() { // 每一秒打一次乒乓
+		for endFlag == false {
+			Ping(workerId)
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
 	AskForTask(mapf)
 
+	endFlag = true
 }
 
 //
@@ -77,8 +87,8 @@ func Register() int {
 	return reply.WorkerId
 }
 
-func Ping() {
-
+func Ping(workerId int) {
+	_ = call(ping, PingArgs{WorkerId: workerId}, PingReply{})
 }
 
 func AskForTask(mapf func(string, string) []KeyValue) {
