@@ -3,6 +3,7 @@ package mr
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -63,21 +64,24 @@ func (c *Coordinator) init() {
 }
 
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
-	reply.WorkerId = c.workerIdCount
-	workerStatus := WorkerStatus{workerId: c.workerIdCount, lastSeen: 0}
-	go workerStatus.longTimeNoSee()
-	c.workerMap[c.workerIdCount] = &workerStatus
-
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	workerIdCountLocal := c.workerIdCount
 	c.workerIdCount++
+	reply.WorkerId = workerIdCountLocal
+	workerStatus := WorkerStatus{workerId: workerIdCountLocal, lastSeen: 0}
+	c.workerMap[workerIdCountLocal] = &workerStatus
+	c.mu.Unlock()
+	go workerStatus.longTimeNoSee()
+
 	return nil
 }
 
 // Sanity check
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
+	c.mu.Lock()
 	worker := c.workerMap[args.WorkerId]
+	c.mu.Unlock()
 
 	worker.mu.Lock()
 	worker.lastSeen = 0
@@ -91,9 +95,11 @@ func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 
 func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.TaskType = 1 // Map
-	reply.FileName = c.Files[c.filePosition]
 	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	reply.FileName = c.Files[c.filePosition]
 	c.filePosition++
 
 	c.mapWaitGroup.Add(1)
@@ -105,7 +111,10 @@ func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error 
 }
 
 func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
-	if c.filePosition < len(c.Files) { // Map还没分配完成
+	c.mu.Lock()
+	filePositionLocal := c.filePosition
+	c.mu.Unlock()
+	if filePositionLocal < len(c.Files) { // Map还没分配完成
 		return c.arrangeMap(args, reply)
 	}
 
@@ -152,21 +161,28 @@ func (c *Coordinator) Done() bool {
 //
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
-// NReduce is the number of reduce tasks to use.
+// nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-
 	fmt.Printf("%v\n", files)
 	fmt.Println(nReduce)
+
+	os.Mkdir("map_file/", os.ModePerm)
+
 	c := Coordinator{Files: files, filePosition: 0, mapDone: false, nReduce: nReduce}
 	c.init()
 	go func() { // 检测map是否完成的线程
+		var filePositionLocal int
 		for {
 			c.mapWaitGroup.Wait()
-			if c.filePosition >= len(c.Files) {
+			c.mu.Lock()
+			filePositionLocal = c.filePosition
+			c.mu.Unlock()
+			if filePositionLocal >= len(c.Files) {
 				c.mapDone = true
 				break
 			}
+
 		}
 	}()
 
