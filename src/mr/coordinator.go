@@ -40,9 +40,7 @@ func (ws *workerStatus) longTimeNoSee() {
 			ws.status = -1
 		}
 		ws.mu.Unlock()
-
 	}
-
 }
 
 type Coordinator struct {
@@ -142,9 +140,6 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 		return c.arrangeMap(args, reply)
 	}
 	if mapDoneLocal { // Map过程完成
-		reply.TaskType = -1 //  tmp for testing
-		return nil
-
 		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
 			c.mu.Lock()
 			c.arrangedReduceCount++
@@ -157,8 +152,6 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 				reply.TaskType = 0
 			}
 		}
-	} else {
-		fmt.Println(*c)
 	}
 
 	reply.TaskType = 0
@@ -210,13 +203,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	go func() { // 检测map是否完成的线程
 		var filePositionLocal int
 		for {
-			//time.Sleep(1*time.Second)
-
-			c.mapWaitGroup.Wait()
+			time.Sleep(900 * time.Millisecond)
 			c.mu.Lock()
 			filePositionLocal = c.filePosition
 			c.mu.Unlock()
 			if filePositionLocal >= len(c.Files) {
+				c.mapWaitGroup.Wait()
 				c.mu.Lock()
 				c.mapDone = true
 				c.mu.Unlock()
