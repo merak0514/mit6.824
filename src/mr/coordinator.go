@@ -10,6 +10,8 @@ import "net"
 import "net/rpc"
 import "net/http"
 
+//var m map[int]*WorkerStatus
+
 type WorkerStatus struct {
 	workerId int
 	lastSeen int
@@ -33,13 +35,15 @@ func (ws *WorkerStatus) longTimeNoSee() {
 
 type Coordinator struct {
 	// Your definitions here.
-	Files    []string
-	position int
-	nReduce  int
-	mapDone  sync.WaitGroup
-	idCount  int
-	workers  map[int]*WorkerStatus
-	mu       sync.Mutex
+	Files               []string
+	filePosition        int
+	nReduce             int
+	arrangedReduceCount int
+	mapWaitGroup        sync.WaitGroup
+	mapDone             bool
+	workerIdCount       int
+	workerMap           map[int]*WorkerStatus
+	mu                  sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -54,43 +58,66 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+func (c *Coordinator) init() {
+	c.workerMap = make(map[int]*WorkerStatus)
+}
+
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
-	reply.WorkerId = c.idCount
-	workerStatus := WorkerStatus{workerId: c.idCount, lastSeen: 0}
+	reply.WorkerId = c.workerIdCount
+	workerStatus := WorkerStatus{workerId: c.workerIdCount, lastSeen: 0}
 	go workerStatus.longTimeNoSee()
-	c.workers[c.idCount] = &workerStatus
+	c.workerMap[c.workerIdCount] = &workerStatus
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.idCount++
+	c.workerIdCount++
 	return nil
 }
 
 // Sanity check
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
-	worker := c.workers[args.WorkerId]
+	worker := c.workerMap[args.WorkerId]
 
 	worker.mu.Lock()
 	worker.lastSeen = 0
 	if worker.status == -1 { //重新收到信号的时候标记已经"死亡"的worker为空闲
 		worker.status = 0
 	}
+	//fmt.Println(worker.lastSeen)
 	worker.mu.Unlock()
 	return nil
 }
 
-func (c *Coordinator) ArrangeTask(args *Idle, reply *ReplyMap) error {
-	if c.position >= len(c.Files) {
-		reply.AllArranged = true
-		return nil
-	}
-	reply.FileName = c.Files[c.position]
-	reply.Id = c.position
+func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
+	reply.TaskType = 1 // Map
+	reply.FileName = c.Files[c.filePosition]
+	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
-	c.position++
+	c.filePosition++
 
-	c.mapDone.Add(1)
+	c.mapWaitGroup.Add(1)
+	return nil
+}
+
+func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error {
+	return nil
+}
+
+func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
+	if c.filePosition < len(c.Files) { // Map还没分配完成
+		return c.arrangeMap(args, reply)
+	}
+
+	if c.mapDone && c.arrangedReduceCount < c.nReduce { // Map过程完成且nReduce没有到上限到时候
+		c.arrangedReduceCount++
+		return c.arrangeReduce(args, reply)
+	} else {
+		fmt.Println(c)
+	}
+
+	reply.TaskType = 0
+
 	return nil
 }
 
@@ -131,7 +158,17 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	fmt.Printf("%v\n", files)
 	fmt.Println(nReduce)
-	c := Coordinator{Files: files, position: 0, nReduce: nReduce}
+	c := Coordinator{Files: files, filePosition: 0, mapDone: false, nReduce: nReduce}
+	c.init()
+	go func() { // 检测map是否完成的线程
+		for {
+			c.mapWaitGroup.Wait()
+			if c.filePosition >= len(c.Files) {
+				c.mapDone = true
+				break
+			}
+		}
+	}()
 
 	// Your code here.
 	for i := 0; i <= nReduce; i++ {

@@ -36,15 +36,16 @@ type PingReply struct {
 	Msg string // useless but for fun
 }
 
-type ReplyMap struct {
+type ReplyTaskInfo struct {
 	AllArranged bool
 	FileName    string
-	Id          int
+	WorkerId    int
 	NReduce     int
+	TaskType    int // 0 no task; 1 map; 2 reduce
 }
 
-type Idle struct {
-	Idle bool
+type ArgsTask struct {
+	WorkerId int
 }
 
 // Add your RPC definitions here.

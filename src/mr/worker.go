@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 import "log"
@@ -43,19 +44,28 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 	endFlag := false
+	endFlagLock := sync.Mutex{}
 	workerId := Register()
 	fmt.Println("Currently in the Worker ", workerId)
 
 	go func() { // 每一秒打一次乒乓
-		for endFlag == false {
+
+		for {
+			endFlagLock.Lock()
+			if endFlag == true {
+				break
+			}
+			endFlagLock.Unlock()
 			Ping(workerId)
 			time.Sleep(1 * time.Second)
 		}
 	}()
 
-	AskForTask(mapf)
-
+	//AskForTask(mapf, workerId)
+	//time.Sleep(3*time.Second)
+	endFlagLock.Lock()
 	endFlag = true
+	endFlagLock.Unlock()
 }
 
 //
@@ -82,32 +92,23 @@ func CallExample() {
 }
 
 func Register() int {
+	fmt.Println("Trying to Register")
 	reply := RegisterReply{}
 	_ = call(register, RegisterArgs{}, reply)
+	fmt.Println("Register successfully")
 	return reply.WorkerId
 }
 
 func Ping(workerId int) {
-	_ = call(ping, PingArgs{WorkerId: workerId}, PingReply{})
+	reply := PingReply{}
+	_ = call(ping, PingArgs{WorkerId: workerId}, &reply)
+	//fmt.Println(reply.Msg)
 }
 
-func AskForTask(mapf func(string, string) []KeyValue) {
-	args := Idle{}
-	args.Idle = true
-	reply := ReplyMap{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.ArrangeTask", &args, &reply)
-	fmt.Println(reply)
-
-	if reply.AllArranged {
-		fmt.Println("All Files had been arranged to Map workers!")
-		return
-	}
-
+func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 	nReduce := reply.NReduce
 
-	id := reply.Id
+	workerId := reply.WorkerId
 
 	file, err := os.Open(reply.FileName)
 	if err != nil {
@@ -123,7 +124,7 @@ func AskForTask(mapf func(string, string) []KeyValue) {
 	var files []*os.File
 	var encs []*json.Encoder
 	for reduceId := 0; reduceId < nReduce; reduceId++ {
-		interName := "mr-" + strconv.Itoa(id) + "-" + strconv.Itoa(reduceId)
+		interName := "map_file/mr-" + strconv.Itoa(workerId) + "-" + strconv.Itoa(reduceId)
 		interFile, _ := os.Create(interName)
 		enc := json.NewEncoder(interFile)
 		encs = append(encs, enc)
@@ -143,7 +144,29 @@ func AskForTask(mapf func(string, string) []KeyValue) {
 	for _, file := range files {
 		file.Close()
 	}
-	//fmt.Printf("reply.ReplyMap %v\n", kva)
+	//fmt.Printf("reply.ReplyTaskInfo %v\n", kva)
+
+}
+
+func DoReduce(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {}
+
+func AskForTask(mapf func(string, string) []KeyValue, workerId int) {
+	args := ArgsTask{WorkerId: workerId}
+	reply := ReplyTaskInfo{}
+
+	// send the RPC request, wait for the reply.
+	call("Coordinator.ArrangeTask", &args, &reply)
+	fmt.Println(reply)
+
+	switch reply.TaskType {
+	case 0:
+		return
+	case 1: //map
+		DoMap(mapf, reply)
+	case 2:
+		DoReduce(mapf, reply)
+	}
+
 }
 
 //
