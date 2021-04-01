@@ -11,16 +11,27 @@ import "net"
 import "net/rpc"
 import "net/http"
 
-//var m map[int]*WorkerStatus
+//var m map[int]*workerStatus
 
-type WorkerStatus struct {
+type workerStatus struct {
 	workerId int
 	lastSeen int
 	status   int // -1 die; 0 idle
 	mu       sync.Mutex
 }
+type mapStatus struct {
+	fileName string
+	workerId int
+	status   int // 0 not arranged; 1 dealing; 2 done
+	mu       sync.Mutex
+}
+type reduceStatus struct {
+	workerId int
 
-func (ws *WorkerStatus) longTimeNoSee() {
+	mu sync.Mutex
+}
+
+func (ws *workerStatus) longTimeNoSee() {
 	for {
 		time.Sleep(1 * time.Second)
 		ws.mu.Lock()
@@ -42,9 +53,13 @@ type Coordinator struct {
 	arrangedReduceCount int
 	mapWaitGroup        sync.WaitGroup
 	mapDone             bool
+	reduceDone          bool
 	workerIdCount       int
-	workerMap           map[int]*WorkerStatus
-	mu                  sync.Mutex
+	workerTable         map[int]*workerStatus
+	mapTable            map[int]*mapStatus
+	reduceTable         map[int]*reduceStatus
+
+	mu sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -60,7 +75,9 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) init() {
-	c.workerMap = make(map[int]*WorkerStatus)
+	c.workerTable = make(map[int]*workerStatus)
+	c.mapTable = make(map[int]*mapStatus)
+	c.reduceTable = make(map[int]*reduceStatus)
 }
 
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
@@ -68,8 +85,8 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	workerIdCountLocal := c.workerIdCount
 	c.workerIdCount++
 	reply.WorkerId = workerIdCountLocal
-	workerStatus := WorkerStatus{workerId: workerIdCountLocal, lastSeen: 0}
-	c.workerMap[workerIdCountLocal] = &workerStatus
+	workerStatus := workerStatus{workerId: workerIdCountLocal, lastSeen: 0}
+	c.workerTable[workerIdCountLocal] = &workerStatus
 	c.mu.Unlock()
 	go workerStatus.longTimeNoSee()
 
@@ -80,7 +97,7 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
 	c.mu.Lock()
-	worker := c.workerMap[args.WorkerId]
+	worker := c.workerTable[args.WorkerId]
 	c.mu.Unlock()
 
 	worker.mu.Lock()
@@ -101,7 +118,6 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	defer c.mu.Unlock()
 	reply.FileName = c.Files[c.filePosition]
 	c.filePosition++
-
 	c.mapWaitGroup.Add(1)
 	return nil
 }
@@ -111,18 +127,38 @@ func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error 
 }
 
 func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
+	if args.LastTask == 1 { // Finished one map task
+		c.mu.Lock()
+		c.mapWaitGroup.Done()
+		c.mu.Unlock()
+	}
 	c.mu.Lock()
 	filePositionLocal := c.filePosition
+	arrangedReduceCountLocal := c.arrangedReduceCount
+	mapDoneLocal := c.mapDone
+	reduceDoneLocal := c.reduceDone
 	c.mu.Unlock()
 	if filePositionLocal < len(c.Files) { // Map还没分配完成
 		return c.arrangeMap(args, reply)
 	}
+	if mapDoneLocal { // Map过程完成
+		reply.TaskType = -1 //  tmp for testing
+		return nil
 
-	if c.mapDone && c.arrangedReduceCount < c.nReduce { // Map过程完成且nReduce没有到上限到时候
-		c.arrangedReduceCount++
-		return c.arrangeReduce(args, reply)
+		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
+			c.mu.Lock()
+			c.arrangedReduceCount++
+			c.mu.Unlock()
+			return c.arrangeReduce(args, reply)
+		} else { //  Map 完成且nReduce到上限
+			if reduceDoneLocal { // Map 和Reduce都完成，让worker去死
+				reply.TaskType = -1
+			} else { //  Map 完成且nReduce到上限，但reduce没完成；这时候再接入的worker要让他们等待（因为有可能出现某个Reduce挂了）
+				reply.TaskType = 0
+			}
+		}
 	} else {
-		fmt.Println(c)
+		fmt.Println(*c)
 	}
 
 	reply.TaskType = 0
@@ -169,17 +205,21 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	os.Mkdir("map_file/", os.ModePerm)
 
-	c := Coordinator{Files: files, filePosition: 0, mapDone: false, nReduce: nReduce}
+	c := Coordinator{Files: files, filePosition: 0, mapDone: false, nReduce: nReduce, reduceDone: false}
 	c.init()
 	go func() { // 检测map是否完成的线程
 		var filePositionLocal int
 		for {
+			//time.Sleep(1*time.Second)
+
 			c.mapWaitGroup.Wait()
 			c.mu.Lock()
 			filePositionLocal = c.filePosition
 			c.mu.Unlock()
 			if filePositionLocal >= len(c.Files) {
+				c.mu.Lock()
 				c.mapDone = true
+				c.mu.Unlock()
 				break
 			}
 

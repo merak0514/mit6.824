@@ -22,7 +22,7 @@ type KeyValue struct {
 }
 
 //
-// use ihash(key) % NReduce to choose the reduce
+// use ihash(key) % nReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 //
 func ihash(key string) int {
@@ -61,7 +61,13 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 	}()
 
-	//AskForTask(mapf, workerId)
+	done := false
+	lastTask := 0 // 0 no task; 1 map; 2 reduce
+	for !done {
+		time.Sleep(1 * time.Second)
+		done = AskForTask(mapf, workerId, &lastTask)
+		fmt.Println("lastTask: ", lastTask)
+	}
 	//time.Sleep(3*time.Second)
 	endFlagLock.Lock()
 	endFlag = true
@@ -144,14 +150,16 @@ func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 	for _, file := range files {
 		file.Close()
 	}
-	//fmt.Printf("reply.ReplyTaskInfo %v\n", kva)
+	fmt.Println("Finished one Map")
 
 }
 
 func DoReduce(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {}
 
-func AskForTask(mapf func(string, string) []KeyValue, workerId int) {
-	args := ArgsTask{WorkerId: workerId}
+func AskForTask(mapf func(string, string) []KeyValue, workerId int, lastTask *int) bool {
+	fmt.Println("Asking for a task")
+	args := ArgsTask{WorkerId: workerId, LastTask: *lastTask}
+	*lastTask = 0
 	reply := ReplyTaskInfo{}
 
 	// send the RPC request, wait for the reply.
@@ -160,12 +168,17 @@ func AskForTask(mapf func(string, string) []KeyValue, workerId int) {
 
 	switch reply.TaskType {
 	case 0:
-		return
+		return false
 	case 1: //map
 		DoMap(mapf, reply)
+		*lastTask = 1
 	case 2:
 		DoReduce(mapf, reply)
+		*lastTask = 2
+	case -1:
+		return true
 	}
+	return false
 
 }
 

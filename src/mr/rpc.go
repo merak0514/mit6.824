@@ -41,11 +41,13 @@ type ReplyTaskInfo struct {
 	FileName    string
 	WorkerId    int
 	NReduce     int
-	TaskType    int // 0 no task; 1 map; 2 reduce
+	TaskType    int // 0 no task; 1 map; 2 reduce; -1 all done
 }
 
 type ArgsTask struct {
 	WorkerId int
+	FileName string
+	LastTask int // 0 no task; 1 map; 2 reduce
 }
 
 // Add your RPC definitions here.
