@@ -46,7 +46,7 @@ func (ws *workerStatus) longTimeNoSee() {
 type Coordinator struct {
 	// Your definitions here.
 	Files               []string
-	filePosition        int
+	mapTaskId           int
 	nReduce             int
 	arrangedReduceCount int
 	mapWaitGroup        sync.WaitGroup
@@ -114,8 +114,9 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.NReduce = c.nReduce
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	reply.FileName = c.Files[c.filePosition]
-	c.filePosition++
+	reply.MapTaskId = c.mapTaskId
+	reply.FileName = c.Files[c.mapTaskId]
+	c.mapTaskId++
 	c.mapWaitGroup.Add(1)
 	return nil
 }
@@ -131,7 +132,7 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 		c.mu.Unlock()
 	}
 	c.mu.Lock()
-	filePositionLocal := c.filePosition
+	filePositionLocal := c.mapTaskId
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
@@ -198,14 +199,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	os.Mkdir("map_file/", os.ModePerm)
 
-	c := Coordinator{Files: files, filePosition: 0, mapDone: false, nReduce: nReduce, reduceDone: false}
+	c := Coordinator{Files: files, mapTaskId: 0, mapDone: false, nReduce: nReduce, reduceDone: false}
 	c.init()
 	go func() { // 检测map是否完成的线程
 		var filePositionLocal int
 		for {
 			time.Sleep(900 * time.Millisecond)
 			c.mu.Lock()
-			filePositionLocal = c.filePosition
+			filePositionLocal = c.mapTaskId
 			c.mu.Unlock()
 			if filePositionLocal >= len(c.Files) {
 				c.mapWaitGroup.Wait()

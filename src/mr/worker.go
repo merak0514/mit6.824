@@ -114,7 +114,7 @@ func Ping(workerId int) {
 func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 	nReduce := reply.NReduce
 
-	workerId := reply.WorkerId
+	mapTaskId := reply.MapTaskId
 
 	file, err := os.Open(reply.FileName)
 	if err != nil {
@@ -130,7 +130,7 @@ func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 	var files []*os.File
 	var encs []*json.Encoder
 	for reduceId := 0; reduceId < nReduce; reduceId++ {
-		interName := "map_file/mr-" + strconv.Itoa(workerId) + "-" + strconv.Itoa(reduceId)
+		interName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceId)
 		interFile, _ := os.Create(interName)
 		enc := json.NewEncoder(interFile)
 		encs = append(encs, enc)
