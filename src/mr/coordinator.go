@@ -14,10 +14,12 @@ import "net/http"
 //var m map[int]*workerStatus
 
 type workerStatus struct {
-	workerId int
-	lastSeen int
-	status   int // -1 die; 0 idle
-	mu       sync.Mutex
+	workerId    int
+	lastSeen    int
+	alive       int // -1 die; 0 idle
+	mission     int // 0 no mission, 1 map, 2 reduce
+	mappingFile int
+	mu          sync.Mutex
 }
 type mapStatus struct {
 	fileName string
@@ -31,13 +33,35 @@ type reduceStatus struct {
 	mu sync.Mutex
 }
 
-func (ws *workerStatus) longTimeNoSee() {
+func (c *Coordinator) dealingMapDie(ws *workerStatus) {
+	ws.mu.Lock()
+	mappingFile := ws.mappingFile
+	ws.mu.Unlock()
+	c.mu.Lock()
+	c.filesQueue = append(c.filesQueue, mappingFile)
+	c.mu.Unlock()
+}
+func (c *Coordinator) dealingReduceDie(ws *workerStatus) {}
+func (c *Coordinator) dealingWorkerDie(ws *workerStatus) {
+	ws.mu.Lock()
+	originMission := ws.mission
+	ws.mu.Unlock()
+	switch originMission {
+	case 1:
+		c.dealingMapDie(ws)
+	case 2:
+		c.dealingReduceDie(ws)
+	}
+}
+
+func (ws *workerStatus) longTimeNoSee(c *Coordinator) {
 	for {
 		time.Sleep(1 * time.Second)
 		ws.mu.Lock()
 		ws.lastSeen++
 		if ws.lastSeen == 10 { //超过10s标记为死亡
-			ws.status = -1
+			ws.alive = -1
+			c.dealingWorkerDie(ws) // 处理后事
 		}
 		ws.mu.Unlock()
 	}
@@ -45,8 +69,8 @@ func (ws *workerStatus) longTimeNoSee() {
 
 type Coordinator struct {
 	// Your definitions here.
-	Files               []string
-	mapTaskId           int
+	Files               []string // 文件，初始化后不更改
+	filesQueue          []int    // 文件队列，其中用id代表每个文件
 	nReduce             int
 	arrangedReduceCount int
 	mapWaitGroup        sync.WaitGroup
@@ -80,14 +104,13 @@ func (c *Coordinator) init() {
 
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	c.mu.Lock()
-	workerIdCountLocal := c.workerIdCount
 	c.workerIdCount++
-	reply.WorkerId = workerIdCountLocal
-	workerStatus := workerStatus{workerId: workerIdCountLocal, lastSeen: 0}
-	c.workerTable[workerIdCountLocal] = &workerStatus
+	reply.WorkerId = c.workerIdCount
+	workerStatus := workerStatus{workerId: c.workerIdCount, lastSeen: 0, alive: 0, mission: 0}
+	c.workerTable[c.workerIdCount] = &workerStatus
+	fmt.Println("worker table: ", c.workerTable)
 	c.mu.Unlock()
-	go workerStatus.longTimeNoSee()
-
+	//go workerStatus.longTimeNoSee(c)
 	return nil
 }
 
@@ -95,13 +118,17 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
 	c.mu.Lock()
+	fmt.Println(c.workerTable)
 	worker := c.workerTable[args.WorkerId]
 	c.mu.Unlock()
 
 	worker.mu.Lock()
 	worker.lastSeen = 0
-	if worker.status == -1 { //重新收到信号的时候标记已经"死亡"的worker为空闲
-		worker.status = 0
+	if worker.alive == -1 { //重新收到信号的时候标记已经"死亡"的worker为空闲
+		worker.alive = 0
+		//	reply.status = 0  // 告诉worker，之前已经把你标记为死亡了，所以之前的任务废弃，你重新申请任务。
+		//} else {
+		//	reply.status = worker.mission  // 告诉worker你目前的任务是什么
 	}
 	//fmt.Println(worker.lastSeen)
 	worker.mu.Unlock()
@@ -112,12 +139,12 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.TaskType = 1 // Map
 	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	reply.MapTaskId = c.mapTaskId
-	reply.FileName = c.Files[c.mapTaskId]
-	c.mapTaskId++
+
+	reply.FileName = c.Files[c.filesQueue[0]]
+	reply.MapTaskId = c.filesQueue[0]
+	c.filesQueue = c.filesQueue[1:]
 	c.mapWaitGroup.Add(1)
+	fmt.Println("222")
 	return nil
 }
 
@@ -132,18 +159,23 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 		c.mu.Unlock()
 	}
 	c.mu.Lock()
-	filePositionLocal := c.mapTaskId
+	defer c.mu.Unlock()
+	lenMapQueue := len(c.filesQueue)
+
+	fmt.Println("Here", lenMapQueue)
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
-	c.mu.Unlock()
-	if filePositionLocal < len(c.Files) { // Map还没分配完成
+	if lenMapQueue > 0 { // Map还没分配完成
+		c.workerTable[args.WorkerId].mission = 1
+		fmt.Println("111")
 		return c.arrangeMap(args, reply)
 	}
 	if mapDoneLocal { // Map过程完成
 		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
 			c.mu.Lock()
 			c.arrangedReduceCount++
+			c.workerTable[args.WorkerId].mission = 2
 			c.mu.Unlock()
 			return c.arrangeReduce(args, reply)
 		} else { //  Map 完成且nReduce到上限
@@ -188,6 +220,14 @@ func (c *Coordinator) Done() bool {
 	return ret
 }
 
+func makeRange(min, max int) []int {
+	a := make([]int, max-min)
+	for i := range a {
+		a[i] = min + i
+	}
+	return a
+}
+
 //
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
@@ -198,17 +238,25 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	fmt.Println(nReduce)
 
 	os.Mkdir("map_file/", os.ModePerm)
+	filesQueue := makeRange(0, len(files))
 
-	c := Coordinator{Files: files, mapTaskId: 0, mapDone: false, nReduce: nReduce, reduceDone: false}
+	c := Coordinator{
+		Files:         files,
+		filesQueue:    filesQueue,
+		mapDone:       false,
+		nReduce:       nReduce,
+		reduceDone:    false,
+		workerIdCount: 0,
+	}
 	c.init()
 	go func() { // 检测map是否完成的线程
-		var filePositionLocal int
+		var lenMapQueue int
 		for {
 			time.Sleep(900 * time.Millisecond)
 			c.mu.Lock()
-			filePositionLocal = c.mapTaskId
+			lenMapQueue = len(c.filesQueue)
 			c.mu.Unlock()
-			if filePositionLocal >= len(c.Files) {
+			if lenMapQueue >= 0 {
 				c.mapWaitGroup.Wait()
 				c.mu.Lock()
 				c.mapDone = true
@@ -219,7 +267,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		}
 	}()
 
-	// Your code here.
 	for i := 0; i <= nReduce; i++ {
 
 	}

@@ -49,10 +49,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	fmt.Println("Currently in the Worker ", workerId)
 
 	go func() { // 每一秒打一次乒乓
-
 		for {
 			endFlagLock.Lock()
 			if endFlag == true {
+				endFlagLock.Unlock()
 				break
 			}
 			endFlagLock.Unlock()
@@ -60,7 +60,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			time.Sleep(1 * time.Second)
 		}
 	}()
-
 	done := false
 	lastTask := 0 // 0 no task; 1 map; 2 reduce
 	for !done {
@@ -108,7 +107,7 @@ func Register() int {
 func Ping(workerId int) {
 	reply := PingReply{}
 	_ = call(ping, PingArgs{WorkerId: workerId}, &reply)
-	//fmt.Println(reply.Msg)
+	fmt.Println(reply.Msg)
 }
 
 func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {

@@ -33,7 +33,8 @@ type PingArgs struct {
 }
 
 type PingReply struct {
-	Msg string // useless but for fun
+	Msg    string // useless but for fun
+	status int    // 在server看来worker的状态：0 idle, 1 map, 2 reduce
 }
 
 type ReplyTaskInfo struct {
