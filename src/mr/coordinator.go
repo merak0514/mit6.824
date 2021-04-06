@@ -34,18 +34,16 @@ type reduceStatus struct {
 }
 
 func (c *Coordinator) dealingMapDie(ws *workerStatus) {
-	ws.mu.Lock()
 	mappingFile := ws.mappingFile
-	ws.mu.Unlock()
 	c.mu.Lock()
 	c.filesQueue = append(c.filesQueue, mappingFile)
 	c.mu.Unlock()
 }
 func (c *Coordinator) dealingReduceDie(ws *workerStatus) {}
 func (c *Coordinator) dealingWorkerDie(ws *workerStatus) {
-	ws.mu.Lock()
+	fmt.Println("Here")
 	originMission := ws.mission
-	ws.mu.Unlock()
+	fmt.Println("originMission", originMission)
 	switch originMission {
 	case 1:
 		c.dealingMapDie(ws)
@@ -69,7 +67,7 @@ func (ws *workerStatus) longTimeNoSee(c *Coordinator) {
 
 type Coordinator struct {
 	// Your definitions here.
-	Files               []string // 文件，初始化后不更改
+	files               []string // 文件，初始化后不更改
 	filesQueue          []int    // 文件队列，其中用id代表每个文件
 	nReduce             int
 	arrangedReduceCount int
@@ -108,9 +106,8 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	reply.WorkerId = c.workerIdCount
 	workerStatus := workerStatus{workerId: c.workerIdCount, lastSeen: 0, alive: 0, mission: 0}
 	c.workerTable[c.workerIdCount] = &workerStatus
-	fmt.Println("worker table: ", c.workerTable)
 	c.mu.Unlock()
-	//go workerStatus.longTimeNoSee(c)
+	go workerStatus.longTimeNoSee(c)
 	return nil
 }
 
@@ -118,7 +115,7 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
 	c.mu.Lock()
-	fmt.Println(c.workerTable)
+	fmt.Println("worker id count", c.workerIdCount)
 	worker := c.workerTable[args.WorkerId]
 	c.mu.Unlock()
 
@@ -140,11 +137,10 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
 
-	reply.FileName = c.Files[c.filesQueue[0]]
+	reply.FileName = c.files[c.filesQueue[0]]
 	reply.MapTaskId = c.filesQueue[0]
 	c.filesQueue = c.filesQueue[1:]
 	c.mapWaitGroup.Add(1)
-	fmt.Println("222")
 	return nil
 }
 
@@ -162,13 +158,15 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	defer c.mu.Unlock()
 	lenMapQueue := len(c.filesQueue)
 
-	fmt.Println("Here", lenMapQueue)
+	fmt.Println("lasted map mission count", lenMapQueue)
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
 	if lenMapQueue > 0 { // Map还没分配完成
-		c.workerTable[args.WorkerId].mission = 1
-		fmt.Println("111")
+		worker := c.workerTable[args.WorkerId]
+		worker.mu.Lock()
+		worker.mission = 1
+		worker.mu.Unlock()
 		return c.arrangeMap(args, reply)
 	}
 	if mapDoneLocal { // Map过程完成
@@ -241,7 +239,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	filesQueue := makeRange(0, len(files))
 
 	c := Coordinator{
-		Files:         files,
+		files:         files,
 		filesQueue:    filesQueue,
 		mapDone:       false,
 		nReduce:       nReduce,

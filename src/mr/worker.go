@@ -99,8 +99,8 @@ func CallExample() {
 func Register() int {
 	fmt.Println("Trying to Register")
 	reply := RegisterReply{}
-	_ = call(register, RegisterArgs{}, reply)
-	fmt.Println("Register successfully")
+	_ = call(register, RegisterArgs{}, &reply) // 没有加 & 就会出问题，可以试试。
+	fmt.Println("Register successfully， with Worker id", reply.WorkerId)
 	return reply.WorkerId
 }
 
