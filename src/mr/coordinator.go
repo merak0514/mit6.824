@@ -36,12 +36,13 @@ type reduceStatus struct {
 func (c *Coordinator) dealingMapDie(ws *workerStatus) {
 	mappingFile := ws.mappingFile
 	c.mu.Lock()
+	c.mapWaitGroup.Done()
 	c.filesQueue = append(c.filesQueue, mappingFile)
 	c.mu.Unlock()
 }
 func (c *Coordinator) dealingReduceDie(ws *workerStatus) {}
 func (c *Coordinator) dealingWorkerDie(ws *workerStatus) {
-	fmt.Println("Here")
+	fmt.Println("Dealing the Death")
 	originMission := ws.mission
 	fmt.Println("originMission", originMission)
 	switch originMission {
@@ -115,7 +116,7 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
 	c.mu.Lock()
-	fmt.Println("worker id count", c.workerIdCount)
+	fmt.Println("Ping worker id count", c.workerIdCount)
 	worker := c.workerTable[args.WorkerId]
 	c.mu.Unlock()
 
@@ -137,10 +138,16 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
 
-	reply.FileName = c.files[c.filesQueue[0]]
+	mappingFile := c.filesQueue[0]
+	reply.FileName = c.files[mappingFile]
 	reply.MapTaskId = c.filesQueue[0]
 	c.filesQueue = c.filesQueue[1:]
 	c.mapWaitGroup.Add(1)
+
+	ws := c.workerTable[args.WorkerId]
+	ws.mu.Lock()
+	ws.mappingFile = mappingFile
+	ws.mu.Unlock()
 	return nil
 }
 
@@ -159,22 +166,21 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	lenMapQueue := len(c.filesQueue)
 
 	fmt.Println("lasted map mission count", lenMapQueue)
+	fmt.Println("MapQueue", c.filesQueue)
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
 	if lenMapQueue > 0 { // Map还没分配完成
-		worker := c.workerTable[args.WorkerId]
-		worker.mu.Lock()
-		worker.mission = 1
-		worker.mu.Unlock()
+		ws := c.workerTable[args.WorkerId]
+		ws.mu.Lock()
+		ws.mission = 1
+		ws.mu.Unlock()
 		return c.arrangeMap(args, reply)
 	}
 	if mapDoneLocal { // Map过程完成
 		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
-			c.mu.Lock()
 			c.arrangedReduceCount++
 			c.workerTable[args.WorkerId].mission = 2
-			c.mu.Unlock()
 			return c.arrangeReduce(args, reply)
 		} else { //  Map 完成且nReduce到上限
 			if reduceDoneLocal { // Map 和Reduce都完成，让worker去死
@@ -254,8 +260,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			c.mu.Lock()
 			lenMapQueue = len(c.filesQueue)
 			c.mu.Unlock()
-			if lenMapQueue >= 0 {
+			if lenMapQueue == 0 {
 				c.mapWaitGroup.Wait()
+				fmt.Println("Map finished")
 				c.mu.Lock()
 				c.mapDone = true
 				c.mu.Unlock()
