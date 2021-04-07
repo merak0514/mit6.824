@@ -38,12 +38,14 @@ type PingReply struct {
 }
 
 type ReplyTaskInfo struct {
-	AllArranged bool
-	FileName    string
-	WorkerId    int
-	NReduce     int
-	TaskType    int // 0 no task; 1 map; 2 reduce; -1 all done
-	MapTaskId   int
+	AllArranged  bool
+	FileName     string
+	WorkerId     int
+	NReduce      int
+	TaskType     int // 0 no task; 1 map; 2 reduce; -1 all done
+	MapTaskId    int
+	ReduceTaskId int
+	NMapFile     int
 }
 
 type ArgsTask struct {

@@ -14,12 +14,12 @@ import "net/http"
 //var m map[int]*workerStatus
 
 type workerStatus struct {
-	workerId    int
-	lastSeen    int
-	alive       int // -1 die; 0 idle
-	mission     int // 0 no mission, 1 map, 2 reduce
-	mappingFile int
-	mu          sync.Mutex
+	workerId      int
+	lastSeen      int
+	alive         int // -1 die; 0 idle
+	mission       int // 0 no mission, 1 map, 2 reduce
+	operatingFile int
+	mu            sync.Mutex
 }
 type mapStatus struct {
 	fileName string
@@ -34,10 +34,10 @@ type reduceStatus struct {
 }
 
 func (c *Coordinator) dealingMapDie(ws *workerStatus) {
-	mappingFile := ws.mappingFile
+	mappingFile := ws.operatingFile
 	c.mu.Lock()
 	c.mapWaitGroup.Done()
-	c.filesQueue = append(c.filesQueue, mappingFile)
+	c.filesMapQueue = append(c.filesMapQueue, mappingFile)
 	c.mu.Unlock()
 }
 func (c *Coordinator) dealingReduceDie(ws *workerStatus) {}
@@ -68,11 +68,15 @@ func (ws *workerStatus) longTimeNoSee(c *Coordinator) {
 
 type Coordinator struct {
 	// Your definitions here.
-	files               []string // 文件，初始化后不更改
-	filesQueue          []int    // 文件队列，其中用id代表每个文件
+	files         []string // 文件，初始化后不更改
+	filesMapQueue []int    // 文件队列，其中用id代表每个文件
+
+	reduceQueue []int
+
 	nReduce             int
 	arrangedReduceCount int
 	mapWaitGroup        sync.WaitGroup
+	reduceWaitGroup     sync.WaitGroup
 	mapDone             bool
 	reduceDone          bool
 	workerIdCount       int
@@ -135,23 +139,31 @@ func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 
 func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.TaskType = 1 // Map
-	reply.WorkerId = args.WorkerId
-	reply.NReduce = c.nReduce
 
-	mappingFile := c.filesQueue[0]
+	mappingFile := c.filesMapQueue[0]
 	reply.FileName = c.files[mappingFile]
-	reply.MapTaskId = c.filesQueue[0]
-	c.filesQueue = c.filesQueue[1:]
+	reply.MapTaskId = mappingFile
+	c.filesMapQueue = c.filesMapQueue[1:]
 	c.mapWaitGroup.Add(1)
 
 	ws := c.workerTable[args.WorkerId]
 	ws.mu.Lock()
-	ws.mappingFile = mappingFile
+	ws.operatingFile = mappingFile
 	ws.mu.Unlock()
 	return nil
 }
 
 func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error {
+	reply.TaskType = 2 // Reduce
+
+	reducingFile := c.reduceQueue[0]
+	reply.ReduceTaskId = reducingFile
+	c.reduceWaitGroup.Add(1)
+
+	ws := c.workerTable[args.WorkerId]
+	ws.mu.Lock()
+	ws.operatingFile = reducingFile
+	ws.mu.Unlock()
 	return nil
 }
 
@@ -160,13 +172,20 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 		c.mu.Lock()
 		c.mapWaitGroup.Done()
 		c.mu.Unlock()
+	} else if args.LastTask == 2 {
+		c.mu.Lock()
+		c.reduceWaitGroup.Done()
+		c.mu.Unlock()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	lenMapQueue := len(c.filesQueue)
+	reply.WorkerId = args.WorkerId
+	reply.NReduce = c.nReduce
+	reply.NMapFile = len(c.files)
 
+	lenMapQueue := len(c.filesMapQueue)
 	fmt.Println("lasted map mission count", lenMapQueue)
-	fmt.Println("MapQueue", c.filesQueue)
+	fmt.Println("MapQueue", c.filesMapQueue)
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
@@ -224,6 +243,7 @@ func (c *Coordinator) Done() bool {
 	return ret
 }
 
+// make a Range for [min, max)
 func makeRange(min, max int) []int {
 	a := make([]int, max-min)
 	for i := range a {
@@ -246,11 +266,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	c := Coordinator{
 		files:         files,
-		filesQueue:    filesQueue,
+		filesMapQueue: filesQueue,
 		mapDone:       false,
 		nReduce:       nReduce,
 		reduceDone:    false,
 		workerIdCount: 0,
+		reduceQueue:   makeRange(0, nReduce),
 	}
 	c.init()
 	go func() { // 检测map是否完成的线程
@@ -258,7 +279,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		for {
 			time.Sleep(900 * time.Millisecond)
 			c.mu.Lock()
-			lenMapQueue = len(c.filesQueue)
+			lenMapQueue = len(c.filesMapQueue)
 			c.mu.Unlock()
 			if lenMapQueue == 0 {
 				c.mapWaitGroup.Wait()

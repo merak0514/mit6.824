@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -20,6 +21,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % nReduce to choose the reduce
@@ -64,7 +73,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	lastTask := 0 // 0 no task; 1 map; 2 reduce
 	for !done {
 		time.Sleep(1 * time.Second)
-		done = AskForTask(mapf, workerId, &lastTask)
+		done = AskForTask(mapf, reducef, workerId, &lastTask)
 		fmt.Println("lastTask: ", lastTask)
 	}
 	//time.Sleep(3*time.Second)
@@ -129,8 +138,8 @@ func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 	var files []*os.File
 	var encs []*json.Encoder
 	for reduceId := 0; reduceId < nReduce; reduceId++ {
-		interName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceId)
-		interFile, _ := os.Create(interName)
+		interFileName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceId)
+		interFile, _ := os.Create(interFileName)
 		enc := json.NewEncoder(interFile)
 		encs = append(encs, enc)
 		files = append(files, interFile)
@@ -153,9 +162,51 @@ func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 
 }
 
-func DoReduce(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {}
+func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
+	reduceTaskId := reply.ReduceTaskId
+	nMapFile := reply.NMapFile
+	var intermediate []KeyValue
+	for mapTaskId := 0; mapTaskId < nMapFile; mapTaskId++ {
+		tmpFileName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceTaskId)
+		file, _ := os.Open(tmpFileName)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
+		}
+		file.Close()
+	}
+	sort.Sort(ByKey(intermediate)) // 还没细读到底怎么写的
 
-func AskForTask(mapf func(string, string) []KeyValue, workerId int, lastTask *int) bool {
+	oname := "mr-out-" + strconv.Itoa(reduceTaskId)
+	ofile, _ := os.Create(oname)
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
+
+}
+
+func AskForTask(mapf func(string, string) []KeyValue, reducef func(string, []string) string, workerId int, lastTask *int) bool {
 	fmt.Println("Asking for a task")
 	args := ArgsTask{WorkerId: workerId, LastTask: *lastTask}
 	*lastTask = 0
@@ -172,7 +223,7 @@ func AskForTask(mapf func(string, string) []KeyValue, workerId int, lastTask *in
 		DoMap(mapf, reply)
 		*lastTask = 1
 	case 2:
-		DoReduce(mapf, reply)
+		DoReduce(reducef, reply)
 		*lastTask = 2
 	case -1:
 		return true
