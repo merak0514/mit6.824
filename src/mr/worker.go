@@ -76,7 +76,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		done = AskForTask(mapf, reducef, workerId, &lastTask)
 		fmt.Println("lastTask: ", lastTask)
 	}
-	//time.Sleep(3*time.Second)
 	endFlagLock.Lock()
 	endFlag = true
 	endFlagLock.Unlock()
@@ -168,6 +167,7 @@ func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
 	var intermediate []KeyValue
 	for mapTaskId := 0; mapTaskId < nMapFile; mapTaskId++ {
 		tmpFileName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceTaskId)
+		//fmt.Println("dealing the file", tmpFileName)
 		file, _ := os.Open(tmpFileName)
 		dec := json.NewDecoder(file)
 		for {
@@ -177,6 +177,7 @@ func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
 			}
 			intermediate = append(intermediate, kv)
 		}
+		//fmt.Println(intermediate)
 		file.Close()
 	}
 	sort.Sort(ByKey(intermediate)) // 还没细读到底怎么写的
@@ -193,6 +194,7 @@ func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
 		values := []string{}
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
+			fmt.Println(values)
 		}
 		output := reducef(intermediate[i].Key, values)
 
@@ -203,6 +205,7 @@ func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
 	}
 
 	ofile.Close()
+	time.Sleep(1 * time.Second)
 
 }
 
