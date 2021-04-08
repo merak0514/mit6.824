@@ -1,6 +1,9 @@
 # mit 6.824
 实验代码
 
+## 哪些代码是我写的？
+`src/mr/` 下面的三个文件，分别是server、worker和rpc通信的部分。
+
 ## lab1
 [lab 1官方网站](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html)
 
