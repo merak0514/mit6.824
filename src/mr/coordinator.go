@@ -130,9 +130,6 @@ func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	worker.lastSeen = 0
 	if worker.alive == -1 { //重新收到信号的时候标记已经"死亡"的worker为空闲
 		worker.alive = 0
-		//	reply.status = 0  // 告诉worker，之前已经把你标记为死亡了，所以之前的任务废弃，你重新申请任务。
-		//} else {
-		//	reply.status = worker.mission  // 告诉worker你目前的任务是什么
 	}
 	//fmt.Println(worker.lastSeen)
 	worker.mu.Unlock()
