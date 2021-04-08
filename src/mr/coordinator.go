@@ -2,6 +2,7 @@ package mr
 
 import (
 	"fmt"
+	"github.com/fatih/color"
 	"log"
 	"os"
 	"sync"
@@ -40,7 +41,13 @@ func (c *Coordinator) dealingMapDie(ws *workerStatus) {
 	c.filesMapQueue = append(c.filesMapQueue, mappingFile)
 	c.mu.Unlock()
 }
-func (c *Coordinator) dealingReduceDie(ws *workerStatus) {}
+func (c *Coordinator) dealingReduceDie(ws *workerStatus) {
+	reducingFile := ws.operatingFile
+	c.mu.Lock()
+	c.reduceWaitGroup.Done()
+	c.reduceQueue = append(c.reduceQueue, reducingFile)
+	c.mu.Unlock()
+}
 func (c *Coordinator) dealingWorkerDie(ws *workerStatus) {
 	fmt.Println("Dealing the Death")
 	originMission := ws.mission
@@ -75,6 +82,7 @@ type Coordinator struct {
 
 	nReduce             int
 	arrangedReduceCount int
+	finishedTaskCount   int // count for map or reduce, depending on phase
 	mapWaitGroup        sync.WaitGroup
 	reduceWaitGroup     sync.WaitGroup
 	mapDone             bool
@@ -120,7 +128,6 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 func (c *Coordinator) Ping(args *PingArgs, reply *PingReply) error {
 	reply.Msg = "Pong" // useless but for fun
 	c.mu.Lock()
-	fmt.Println("Ping worker id count", c.workerIdCount)
 	worker := c.workerTable[args.WorkerId]
 	c.mu.Unlock()
 
@@ -158,6 +165,7 @@ func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error 
 
 	reducingFile := c.reduceQueue[0]
 	reply.ReduceTaskId = reducingFile
+	c.reduceQueue = c.reduceQueue[1:]
 	c.reduceWaitGroup.Add(1)
 
 	ws := c.workerTable[args.WorkerId]
@@ -181,15 +189,14 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	defer c.mu.Unlock()
 	reply.WorkerId = args.WorkerId
 	reply.NReduce = c.nReduce
-	reply.NMapFile = len(c.files)
+	reply.NMap = len(c.files)
 
 	lenMapQueue := len(c.filesMapQueue)
-	fmt.Println("lasted map mission count", lenMapQueue)
-	fmt.Println("MapQueue", c.filesMapQueue)
 	arrangedReduceCountLocal := c.arrangedReduceCount
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
 	if lenMapQueue > 0 { // Map还没分配完成
+		fmt.Println("MapQueue", c.filesMapQueue)
 		ws := c.workerTable[args.WorkerId]
 		ws.mu.Lock()
 		ws.mission = 1
@@ -197,6 +204,7 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 		return c.arrangeMap(args, reply)
 	}
 	if mapDoneLocal { // Map过程完成
+		fmt.Println("ReduceQueue", c.reduceQueue)
 		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
 			c.arrangedReduceCount++
 			c.workerTable[args.WorkerId].mission = 2
@@ -237,8 +245,11 @@ func (c *Coordinator) server() {
 //
 func (c *Coordinator) Done() bool {
 	ret := false
-
-	// Your code here.
+	c.mu.Lock()
+	if c.reduceDone && c.mapDone {
+		ret = true
+	}
+	c.mu.Unlock()
 
 	return ret
 }
@@ -262,11 +273,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	fmt.Println(nReduce)
 
 	os.Mkdir("map_file/", os.ModePerm)
-	filesQueue := makeRange(0, len(files))
+	//filesQueue := makeRange(0, len(files))
 
 	c := Coordinator{
 		files:         files,
-		filesMapQueue: filesQueue,
+		filesMapQueue: makeRange(0, len(files)),
 		mapDone:       false,
 		nReduce:       nReduce,
 		reduceDone:    false,
@@ -283,13 +294,34 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			c.mu.Unlock()
 			if lenMapQueue == 0 {
 				c.mapWaitGroup.Wait()
+				color.Set(color.FgGreen)
 				fmt.Println("Map finished")
+				color.Unset()
 				c.mu.Lock()
 				c.mapDone = true
 				c.mu.Unlock()
 				break
 			}
 
+		}
+	}()
+
+	go func() {
+		var lenReduceQueue int
+		for {
+			time.Sleep(900 * time.Millisecond)
+			c.mu.Lock()
+			lenReduceQueue = len(c.reduceQueue)
+			c.mu.Unlock()
+			if lenReduceQueue == 0 {
+				c.reduceWaitGroup.Wait()
+				color.Set(color.FgGreen)
+				fmt.Println("Reduce finished")
+				color.Unset()
+				c.mu.Lock()
+				c.reduceDone = true
+				c.mu.Unlock()
+			}
 		}
 	}()
 

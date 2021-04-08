@@ -164,7 +164,7 @@ func DoMap(mapf func(string, string) []KeyValue, reply ReplyTaskInfo) {
 
 func DoReduce(reducef func(string, []string) string, reply ReplyTaskInfo) {
 	reduceTaskId := reply.ReduceTaskId
-	nMapFile := reply.NMapFile
+	nMapFile := reply.NMap
 	var intermediate []KeyValue
 	for mapTaskId := 0; mapTaskId < nMapFile; mapTaskId++ {
 		tmpFileName := "map_file/mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(reduceTaskId)

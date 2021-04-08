@@ -42,10 +42,10 @@ type ReplyTaskInfo struct {
 	FileName     string
 	WorkerId     int
 	NReduce      int
+	NMap         int
 	TaskType     int // 0 no task; 1 map; 2 reduce; -1 all done
 	MapTaskId    int
 	ReduceTaskId int
-	NMapFile     int
 }
 
 type ArgsTask struct {
