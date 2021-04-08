@@ -37,14 +37,12 @@ type reduceStatus struct {
 func (c *Coordinator) dealingMapDie(ws *workerStatus) {
 	mappingFile := ws.operatingFile
 	c.mu.Lock()
-	c.mapWaitGroup.Done()
 	c.filesMapQueue = append(c.filesMapQueue, mappingFile)
 	c.mu.Unlock()
 }
 func (c *Coordinator) dealingReduceDie(ws *workerStatus) {
 	reducingFile := ws.operatingFile
 	c.mu.Lock()
-	c.reduceWaitGroup.Done()
 	c.reduceQueue = append(c.reduceQueue, reducingFile)
 	c.mu.Unlock()
 }
@@ -80,17 +78,14 @@ type Coordinator struct {
 
 	reduceQueue []int
 
-	nReduce             int
-	arrangedReduceCount int
-	finishedTaskCount   int // count for map or reduce, depending on phase
-	mapWaitGroup        sync.WaitGroup
-	reduceWaitGroup     sync.WaitGroup
-	mapDone             bool
-	reduceDone          bool
-	workerIdCount       int
-	workerTable         map[int]*workerStatus
-	mapTable            map[int]*mapStatus
-	reduceTable         map[int]*reduceStatus
+	nReduce           int
+	finishedTaskCount int // count for map or reduce, depending on phase
+	mapDone           bool
+	reduceDone        bool
+	workerIdCount     int
+	workerTable       map[int]*workerStatus
+	mapTable          map[int]*mapStatus
+	reduceTable       map[int]*reduceStatus
 
 	mu sync.Mutex
 }
@@ -151,7 +146,6 @@ func (c *Coordinator) arrangeMap(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.FileName = c.files[mappingFile]
 	reply.MapTaskId = mappingFile
 	c.filesMapQueue = c.filesMapQueue[1:]
-	c.mapWaitGroup.Add(1)
 
 	ws := c.workerTable[args.WorkerId]
 	ws.mu.Lock()
@@ -166,7 +160,6 @@ func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error 
 	reducingFile := c.reduceQueue[0]
 	reply.ReduceTaskId = reducingFile
 	c.reduceQueue = c.reduceQueue[1:]
-	c.reduceWaitGroup.Add(1)
 
 	ws := c.workerTable[args.WorkerId]
 	ws.mu.Lock()
@@ -178,11 +171,24 @@ func (c *Coordinator) arrangeReduce(args *ArgsTask, reply *ReplyTaskInfo) error 
 func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	if args.LastTask == 1 { // Finished one map task
 		c.mu.Lock()
-		c.mapWaitGroup.Done()
+		c.finishedTaskCount++
+		if c.finishedTaskCount == len(c.files) {
+			c.mapDone = true
+			color.Set(color.FgGreen)
+			fmt.Println("Map finished")
+			color.Unset()
+			c.finishedTaskCount = 0
+		}
 		c.mu.Unlock()
 	} else if args.LastTask == 2 {
 		c.mu.Lock()
-		c.reduceWaitGroup.Done()
+		c.finishedTaskCount++
+		if c.finishedTaskCount == c.nReduce {
+			c.reduceDone = true
+			color.Set(color.FgGreen)
+			fmt.Println("Reduce finished")
+			color.Unset()
+		}
 		c.mu.Unlock()
 	}
 	c.mu.Lock()
@@ -192,7 +198,7 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	reply.NMap = len(c.files)
 
 	lenMapQueue := len(c.filesMapQueue)
-	arrangedReduceCountLocal := c.arrangedReduceCount
+	lenReduceQueue := len(c.reduceQueue)
 	mapDoneLocal := c.mapDone
 	reduceDoneLocal := c.reduceDone
 	if lenMapQueue > 0 { // Map还没分配完成
@@ -205,8 +211,7 @@ func (c *Coordinator) ArrangeTask(args *ArgsTask, reply *ReplyTaskInfo) error {
 	}
 	if mapDoneLocal { // Map过程完成
 		fmt.Println("ReduceQueue", c.reduceQueue)
-		if arrangedReduceCountLocal < c.nReduce { //  且nReduce没有到上限到时候
-			c.arrangedReduceCount++
+		if lenReduceQueue > 0 { //  且nReduce没有到上限到时候
 			c.workerTable[args.WorkerId].mission = 2
 			return c.arrangeReduce(args, reply)
 		} else { //  Map 完成且nReduce到上限
@@ -276,54 +281,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	//filesQueue := makeRange(0, len(files))
 
 	c := Coordinator{
-		files:         files,
-		filesMapQueue: makeRange(0, len(files)),
-		mapDone:       false,
-		nReduce:       nReduce,
-		reduceDone:    false,
-		workerIdCount: 0,
-		reduceQueue:   makeRange(0, nReduce),
+		files:             files,
+		filesMapQueue:     makeRange(0, len(files)),
+		mapDone:           false,
+		nReduce:           nReduce,
+		reduceDone:        false,
+		workerIdCount:     0,
+		reduceQueue:       makeRange(0, nReduce),
+		finishedTaskCount: 0,
 	}
 	c.init()
-	go func() { // 检测map是否完成的线程
-		var lenMapQueue int
-		for {
-			time.Sleep(900 * time.Millisecond)
-			c.mu.Lock()
-			lenMapQueue = len(c.filesMapQueue)
-			c.mu.Unlock()
-			if lenMapQueue == 0 {
-				c.mapWaitGroup.Wait()
-				color.Set(color.FgGreen)
-				fmt.Println("Map finished")
-				color.Unset()
-				c.mu.Lock()
-				c.mapDone = true
-				c.mu.Unlock()
-				break
-			}
-
-		}
-	}()
-
-	go func() {
-		var lenReduceQueue int
-		for {
-			time.Sleep(900 * time.Millisecond)
-			c.mu.Lock()
-			lenReduceQueue = len(c.reduceQueue)
-			c.mu.Unlock()
-			if lenReduceQueue == 0 {
-				c.reduceWaitGroup.Wait()
-				color.Set(color.FgGreen)
-				fmt.Println("Reduce finished")
-				color.Unset()
-				c.mu.Lock()
-				c.reduceDone = true
-				c.mu.Unlock()
-			}
-		}
-	}()
 
 	for i := 0; i <= nReduce; i++ {
 
